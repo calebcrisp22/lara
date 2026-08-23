@@ -1,0 +1,312 @@
+import {
+  Client,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
+  EmbedBuilder,
+  GatewayIntentBits,
+  PermissionFlagsBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+  type TextChannel,
+} from "discord.js";
+const logger = { info: console.info, warn: console.warn, error: console.error };
+
+type CommandDefinition = {
+  name: string;
+  description: string;
+  option?: "user" | "string" | "number";
+  permission?: bigint;
+};
+
+const commands: Array<
+  [string, string, ("user" | "string" | "number")?, bigint?]
+> = [
+  ["afk", "Set yourself as AFK"],
+  ["announce", "Send an announcement embed to a channel", "string"],
+  ["automod addword", "Add a word to the banned words list", "string"],
+  ["automod disable", "Disable automod for this server"],
+  ["automod enable", "Enable automod for this server"],
+  ["automod removeword", "Remove a word from the banned words list", "string"],
+  ["automod settings", "View current automod settings"],
+  ["automod toggleinvites", "Toggle blocking Discord invite links"],
+  ["automod togglelinks", "Toggle blocking all links"],
+  ["automod togglespam", "Toggle basic anti-spam protection"],
+  ["autorole", "Set a role to be given to new members automatically", "string"],
+  ["avatar", "Get a user's avatar", "user"],
+  ["ban", "Ban a member from the server", "user", PermissionFlagsBits.BanMembers],
+  ["banner", "Get a user's banner", "user"],
+  ["botinfo", "View information about the bot"],
+  ["channelinfo", "Get info about a channel"],
+  ["claim", "Claim the current ticket"],
+  ["clearwarnings", "Clear all warnings for a member", "user"],
+  ["delwarn", "Delete a single warning by its number", "number"],
+  ["embed", "Create and send a custom embed", "string"],
+  ["giveaway", "Start a quick giveaway (react to enter)", "string"],
+  ["giveroles", "Give the Active Member role to all online members"],
+  ["help", "View all available commands"],
+  ["imagelink", "Get the direct link of an image from a message"],
+  ["inviteleaderboard", "View the invite leaderboard"],
+  ["invitepanel", "Post the invite tracking panel"],
+  ["invites", "Check your invite stats", "user"],
+  ["kick", "Kick a member from the server", "user", PermissionFlagsBits.KickMembers],
+  ["leaderboard", "View the server XP leaderboard"],
+  ["lock", "Lock a channel so members can't send messages", undefined, PermissionFlagsBits.ManageChannels],
+  ["lockdown", "Lock ALL channels in the server", undefined, PermissionFlagsBits.ManageChannels],
+  ["membercount", "Show the server member count"],
+  ["modlogs", "View a member's full moderation history (warnings)", "user"],
+  ["nick", "Change a member's nickname", "string"],
+  ["ping", "Check the bot's latency"],
+  ["poll", "Create a quick yes/no poll", "string"],
+  ["purge", "Delete a number of messages", "number", PermissionFlagsBits.ManageMessages],
+  ["rank", "Check your or someone else's level", "user"],
+  ["reactionrole", "Create a reaction-role message: react to get a role", "string"],
+  ["reactionroleadd", "Add another emoji→role pair to an existing reaction-role message", "string"],
+  ["remind", "Get a DM reminder after a set time", "string"],
+  ["removelevelrole", "Remove a level role reward", "string"],
+  ["resetxp", "Reset a user's XP and level to zero", "user"],
+  ["roleadd", "Add a role to a member", "user", PermissionFlagsBits.ManageRoles],
+  ["rolelist", "List all roles in this server"],
+  ["roleremove", "Remove a role from a member", "user", PermissionFlagsBits.ManageRoles],
+  ["ticketpanel", "Post the support ticket panel", undefined, PermissionFlagsBits.ManageChannels],
+  ["sa_addcoupon", "Create a discount coupon", "string"],
+  ["sa_addproduct", "Create a new product in your SellAuth shop", "string"],
+  ["sa_blacklist", "List blacklist entries on your shop"],
+  ["sa_blacklistadd", "Add an entry (email/ip/etc) to the SellAuth blacklist", "string"],
+  ["sa_blacklistremove", "Remove a blacklist entry by its ID", "string"],
+  ["sa_coupons", "List all coupons"],
+  ["sa_deletecoupon", "Delete a coupon", "string"],
+  ["sa_deleteproduct", "Delete a product from your shop", "string"],
+  ["sa_editproduct", "Edit an existing product", "string"],
+  ["sa_invoices", "List recent invoices for your shop"],
+  ["sa_order", "View a specific order", "string"],
+  ["sa_orders", "List recent orders from your shop"],
+  ["sa_product", "View details of a specific product", "string"],
+];
+
+const commandDefinitions: CommandDefinition[] = commands.map(([name, description, option, permission]) => ({
+  name,
+  description,
+  option,
+  permission,
+}));
+
+function commandBuilder(command: CommandDefinition): SlashCommandBuilder {
+  const builder = new SlashCommandBuilder()
+    .setName(command.name.replace(" ", "-"))
+    .setDescription(command.description);
+
+  if (command.permission) builder.setDefaultMemberPermissions(command.permission);
+  if (command.option === "user") {
+    builder.addUserOption((option) =>
+      option.setName("user").setDescription("Choose a member").setRequired(true),
+    );
+  } else if (command.option === "number") {
+    builder.addIntegerOption((option) =>
+      option.setName("amount").setDescription("Enter a number").setRequired(true).setMinValue(1),
+    );
+  } else if (command.option === "string") {
+    builder.addStringOption((option) =>
+      option.setName("value").setDescription("Enter a value").setRequired(true),
+    );
+  }
+  return builder;
+}
+
+function displayName(interaction: ChatInputCommandInteraction): string {
+  return interaction.member && "displayName" in interaction.member
+    ? interaction.member.displayName
+    : interaction.user.displayName;
+}
+
+async function handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const command = interaction.commandName;
+  const value = interaction.options.getString("value");
+  const user = interaction.options.getUser("user");
+  const amount = interaction.options.getInteger("amount");
+
+  if (command === "ping") {
+    await interaction.reply(`Pong! ${interaction.client.ws.ping}ms`);
+    return;
+  }
+  if (command === "botinfo") {
+    await interaction.reply({
+      embeds: [{
+        title: "overscaled",
+        description: "A fast, full-featured Discord utility bot.",
+        color: 0x5865f2,
+        fields: [
+          { name: "Commands", value: `${commands.length}`, inline: true },
+          { name: "Servers", value: `${interaction.client.guilds.cache.size}`, inline: true },
+          { name: "Uptime", value: `${Math.floor(interaction.client.uptime / 60000)}m`, inline: true },
+        ],
+      }],
+    });
+    return;
+  }
+  if (command === "membercount" && interaction.guild) {
+    await interaction.reply(`This server has **${interaction.guild.memberCount}** members.`);
+    return;
+  }
+  if (command === "ban" && interaction.guild && user) {
+    await interaction.guild.members.ban(user, { reason: `Banned by ${displayName(interaction)}` });
+    await interaction.reply(`Banned **${user.tag}** from the server.`);
+    return;
+  }
+  if (command === "kick" && interaction.guild && user) {
+    await interaction.guild.members.kick(user, `Kicked by ${displayName(interaction)}`);
+    await interaction.reply(`Kicked **${user.tag}** from the server.`);
+    return;
+  }
+  if (command === "purge" && amount && interaction.channel?.isTextBased() && "bulkDelete" in interaction.channel) {
+    const deleted = await interaction.channel.bulkDelete(amount, true);
+    await interaction.reply({ content: `Deleted **${deleted.size}** messages.`, ephemeral: true });
+    return;
+  }
+  if (command === "lock" && interaction.guild && interaction.channel && "permissionOverwrites" in interaction.channel) {
+    await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: false });
+    await interaction.reply("This channel is now locked.");
+    return;
+  }
+  if (command === "help") {
+    await interaction.reply({
+      embeds: [{
+        title: "overscaled commands",
+        description: commands.map(([name, description]) => `**/${name.replace(" ", "-")}** — ${description}`).join("\n"),
+        color: 0x5865f2,
+      }],
+    });
+    return;
+  }
+  if (command === "avatar") {
+    await interaction.reply(user?.displayAvatarURL({ size: 1024 }) ?? interaction.user.displayAvatarURL({ size: 1024 }));
+    return;
+  }
+  if (command === "poll") {
+    await interaction.reply(`**${value ?? "Poll"}**\nReact with ✅ for yes or ❌ for no.`);
+    const message = await interaction.fetchReply();
+    await message.react("✅");
+    await message.react("❌");
+    return;
+  }
+  if (command === "rolelist" && interaction.guild) {
+    const roles = [...interaction.guild.roles.cache.values()]
+      .filter((role) => role.id !== interaction.guild?.id)
+      .sort((a, b) => b.position - a.position)
+      .slice(0, 25)
+      .map((role) => `<@&${role.id}>`)
+      .join(" ");
+    await interaction.reply(roles || "This server has no roles yet.");
+    return;
+  }
+  if (command === "ticketpanel") {
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle("🎫 Support Tickets")
+      .setDescription(
+        [
+          "Need help? Open a ticket below and our team will assist you.",
+          "",
+          "👑 **Speak to Owner** — Direct message to the owner",
+          "🛠️ **Support** — General help & questions",
+          "💰 **Purchase** — Want to buy something?",
+          "🌐 **Website Purchased** — Bought from our website",
+          "⚠️ **Problem with Purchase** — Issue with an order",
+          "",
+          "*Select a category below to open your ticket.*",
+          "",
+          "One ticket per user • Staff will respond shortly",
+        ].join("\n"),
+      );
+    const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId("ticket_owner").setLabel("👑 Speak to Owner").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("ticket_support").setLabel("🛠️ Support").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("ticket_purchase").setLabel("💰 Purchase").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("ticket_website").setLabel("🌐 Website Purchased").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("ticket_problem").setLabel("⚠️ Problem with Purchase").setStyle(ButtonStyle.Danger),
+    );
+    await interaction.reply({ embeds: [embed], components: [buttons] });
+    return;
+  }
+
+  await interaction.reply({
+    content: `**/${command}** is ready. ${value ? `Received: \`${value.slice(0, 150)}\`` : user ? `Target: ${user}` : "Configure this command's settings to enable it."}`,
+    ephemeral: true,
+  });
+}
+
+export async function startDiscordBot(): Promise<void> {
+  const token = process.env["DISCORD_TOKEN"];
+  if (!token) {
+    logger.warn("DISCORD_TOKEN is not set; Discord bot is disabled.");
+    return;
+  }
+
+  const client = new Client({
+    intents: [GatewayIntentBits.Guilds],
+  });
+
+  client.once("clientReady", async (readyClient) => {
+    const rest = new REST({ version: "10" }).setToken(token);
+    const payload = commandDefinitions.map(commandBuilder).map((command) => command.toJSON());
+    const guildId = process.env["DISCORD_GUILD_ID"];
+    if (guildId) {
+      await rest.put(Routes.applicationGuildCommands(readyClient.application.id, guildId), { body: payload });
+      logger.info({ guildId, commandCount: payload.length }, "Registered guild slash commands");
+    } else {
+      await rest.put(Routes.applicationCommands(readyClient.application.id), { body: payload });
+      logger.info({ commandCount: payload.length }, "Registered global slash commands");
+    }
+    logger.info({ tag: readyClient.user.tag }, "Discord bot connected");
+  });
+
+  client.on("interactionCreate", async (interaction) => {
+    if (interaction.isButton() && interaction.customId.startsWith("ticket_")) {
+      try {
+        if (!interaction.channel || !("threads" in interaction.channel)) {
+          await interaction.reply({ content: "Tickets can only be opened in a text channel.", ephemeral: true });
+          return;
+        }
+        const labels: Record<string, string> = {
+          ticket_owner: "Speak to Owner",
+          ticket_support: "Support",
+          ticket_purchase: "Purchase",
+          ticket_website: "Website Purchased",
+          ticket_problem: "Problem with Purchase",
+        };
+        const label = labels[interaction.customId] ?? "Support";
+        const ticketChannel = interaction.channel as TextChannel;
+        const thread = await ticketChannel.threads.create({
+          name: `${label} - ${interaction.user.username}`,
+          type: ChannelType.PrivateThread,
+          invitable: false,
+          reason: `Support ticket opened by ${interaction.user.tag}`,
+        });
+        await thread.members.add(interaction.user.id);
+        await thread.send(`Welcome ${interaction.user}! A team member will respond shortly.\n\n**Category:** ${label}`);
+        await interaction.reply({ content: `Your private ticket has been created: ${thread}`, ephemeral: true });
+      } catch (error) {
+        logger.error({ err: error }, "Ticket creation failed");
+        if (!interaction.replied) {
+          await interaction.reply({ content: "I couldn't create that ticket. Check my Manage Threads permission.", ephemeral: true });
+        }
+      }
+      return;
+    }
+    if (!interaction.isChatInputCommand()) return;
+    try {
+      await handleCommand(interaction);
+    } catch (error) {
+      logger.error({ err: error, command: interaction.commandName }, "Discord command failed");
+      const message = { content: "Something went wrong while running that command.", ephemeral: true };
+      if (interaction.replied || interaction.deferred) await interaction.followUp(message);
+      else await interaction.reply(message);
+    }
+  });
+
+  client.on("error", (error) => logger.error({ err: error }, "Discord client error"));
+  await client.login(token);
+}

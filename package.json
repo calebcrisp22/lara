@@ -1,0 +1,19 @@
+{
+  "name": "overscaled-discord-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
