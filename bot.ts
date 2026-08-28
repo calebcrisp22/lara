@@ -449,7 +449,7 @@ export async function startDiscordBot(): Promise<void> {
           return;
         }
 
-        await interaction.reply({ content: "🔒 Closing ticket in 5 seconds..." });
+        await interaction.deferReply();
 
         // Build a transcript of the ticket channel's messages
         const messages = await channel.messages.fetch({ limit: 100 });
@@ -476,10 +476,16 @@ export async function startDiscordBot(): Promise<void> {
           logger.error({ transcriptChannelId: TRANSCRIPT_CHANNEL_ID }, "Transcript channel not found");
         }
 
-        setTimeout(() => channel.delete().catch(logger.error), 5000);
+        await channel.delete();
+
+        await interaction.followUp({ content: "🔒 Ticket closed." });
       } catch (error) {
         logger.error({ err: error }, "Ticket close failed");
-        await interaction.reply({ content: "Failed to close ticket.", ephemeral: true });
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({ content: "Failed to close ticket.", ephemeral: true });
+        } else {
+          await interaction.reply({ content: "Failed to close ticket.", ephemeral: true });
+        }
       }
       return;
     }
