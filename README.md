@@ -20,6 +20,8 @@ This is the complete, minimal project for hosting the bot on Railway.
 2. In Railway, open **Variables** and add:
    - `DISCORD_TOKEN` = your Discord bot token
    - `DISCORD_GUILD_ID` = optional server ID for instant command registration
+   - `SELLAUTH_API_KEY` = your SellAuth API key (required for `/sa_invoice` and other `sa_*` commands)
+   - `SELLAUTH_SHOP_ID` = your SellAuth shop ID (required for `/sa_invoice` and other `sa_*` commands)
 3. Railway should detect the Node project automatically.
 4. If Railway asks for commands, use:
    - Build: `npm run build`

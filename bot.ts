@@ -85,6 +85,7 @@ const commands: Array<
   ["sa_deletecoupon", "Delete a coupon", "string"],
   ["sa_deleteproduct", "Delete a product from your shop", "string"],
   ["sa_editproduct", "Edit an existing product", "string"],
+  ["sa_invoice", "Look up a SellAuth invoice by ID", "string"],
   ["sa_invoices", "List recent invoices for your shop"],
   ["sa_order", "View a specific order", "string"],
   ["sa_orders", "List recent orders from your shop"],
@@ -124,6 +125,69 @@ function displayName(interaction: ChatInputCommandInteraction): string {
   return interaction.member && "displayName" in interaction.member
     ? interaction.member.displayName
     : interaction.user.displayName;
+}
+
+const SELLAUTH_API_BASE = "https://api.sellauth.com/v1";
+
+type SellauthInvoice = Record<string, unknown>;
+
+async function fetchSellauthInvoice(invoiceId: string): Promise<SellauthInvoice> {
+  const apiKey = process.env["SELLAUTH_API_KEY"];
+  const shopId = process.env["SELLAUTH_SHOP_ID"];
+  if (!apiKey || !shopId) {
+    throw new Error("SELLAUTH_API_KEY or SELLAUTH_SHOP_ID is not configured.");
+  }
+
+  const response = await fetch(`${SELLAUTH_API_BASE}/shops/${shopId}/invoices/${invoiceId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (response.status === 404) {
+    throw new Error(`No invoice found with ID \`${invoiceId}\`.`);
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`SellAuth API returned ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+  }
+
+  const data = await response.json();
+  return (data && typeof data === "object" && "data" in data ? (data as { data: SellauthInvoice }).data : data) as SellauthInvoice;
+}
+
+function formatSellauthValue(value: unknown): string {
+  if (value === null || value === undefined) return "N/A";
+  if (typeof value === "object") {
+    const json = JSON.stringify(value);
+    return json.length > 1000 ? `${json.slice(0, 1000)}…` : json;
+  }
+  return String(value);
+}
+
+function buildInvoiceEmbed(invoiceId: string, invoice: SellauthInvoice): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(`Invoice #${invoiceId}`)
+    .setTimestamp(new Date());
+
+  const entries = Object.entries(invoice);
+  if (entries.length === 0) {
+    embed.setDescription("No invoice data returned by SellAuth.");
+    return embed;
+  }
+
+  for (const [key, value] of entries.slice(0, 25)) {
+    embed.addFields({
+      name: key,
+      value: formatSellauthValue(value).slice(0, 1024) || "N/A",
+      inline: typeof value !== "object",
+    });
+  }
+
+  return embed;
 }
 
 async function handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -233,6 +297,23 @@ async function handleCommand(interaction: ChatInputCommandInteraction): Promise<
       new ButtonBuilder().setCustomId("ticket_problem").setLabel("⚠️ Problem with Purchase").setStyle(ButtonStyle.Danger),
     );
     await interaction.reply({ embeds: [embed], components: [buttons] });
+    return;
+  }
+  if (command === "sa_invoice") {
+    const invoiceId = value?.trim();
+    if (!invoiceId) {
+      await interaction.reply({ content: "Please provide an invoice ID.", ephemeral: true });
+      return;
+    }
+    await interaction.deferReply();
+    try {
+      const invoice = await fetchSellauthInvoice(invoiceId);
+      await interaction.editReply({ embeds: [buildInvoiceEmbed(invoiceId, invoice)] });
+    } catch (error) {
+      logger.error({ err: error, invoiceId }, "Failed to fetch SellAuth invoice");
+      const message = error instanceof Error ? error.message : "Failed to fetch that invoice from SellAuth.";
+      await interaction.editReply({ content: `❌ ${message}` });
+    }
     return;
   }
 
