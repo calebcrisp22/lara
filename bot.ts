@@ -271,8 +271,8 @@ export async function startDiscordBot(): Promise<void> {
   client.on("interactionCreate", async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith("ticket_")) {
       try {
-        if (!interaction.channel || !("threads" in interaction.channel)) {
-          await interaction.reply({ content: "Tickets can only be opened in a text channel.", ephemeral: true });
+        if (!interaction.guild) {
+          await interaction.reply({ content: "Tickets can only be opened in a server.", ephemeral: true });
           return;
         }
         const labels: Record<string, string> = {
@@ -283,20 +283,38 @@ export async function startDiscordBot(): Promise<void> {
           ticket_problem: "Problem with Purchase",
         };
         const label = labels[interaction.customId] ?? "Support";
-        const ticketChannel = interaction.channel as TextChannel;
-        const thread = await ticketChannel.threads.create({
+        
+        // Create a category channel for the ticket
+        const category = await interaction.guild.channels.create({
           name: `${label} - ${interaction.user.username}`,
-          type: ChannelType.PrivateThread,
-          invitable: false,
+          type: ChannelType.GuildCategory,
           reason: `Support ticket opened by ${interaction.user.tag}`,
+          permissionOverwrites: [
+            {
+              id: interaction.guild.roles.everyone.id,
+              deny: [PermissionFlagsBits.ViewChannel],
+            },
+            {
+              id: interaction.user.id,
+              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages],
+            },
+          ],
         });
-        await thread.members.add(interaction.user.id);
-        await thread.send(`Welcome ${interaction.user}! A team member will respond shortly.\n\n**Category:** ${label}`);
-        await interaction.reply({ content: `Your private ticket has been created: ${thread}`, ephemeral: true });
+        
+        // Create a text channel inside the category
+        const ticketChannel = await interaction.guild.channels.create({
+          name: `ticket-${Date.now()}`,
+          type: ChannelType.GuildText,
+          parent: category.id,
+          reason: `Support ticket channel for ${interaction.user.tag}`,
+        });
+        
+        await ticketChannel.send(`Welcome ${interaction.user}! A team member will respond shortly.\n\n**Category:** ${label}`);
+        await interaction.reply({ content: `Your ticket has been created in ${ticketChannel}`, ephemeral: true });
       } catch (error) {
         logger.error({ err: error }, "Ticket creation failed");
         if (!interaction.replied) {
-          await interaction.reply({ content: "I couldn't create that ticket. Check my Manage Threads permission.", ephemeral: true });
+          await interaction.reply({ content: "I couldn't create that ticket. Check my Manage Channels permission.", ephemeral: true });
         }
       }
       return;
