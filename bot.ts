@@ -249,7 +249,12 @@ export async function startDiscordBot(): Promise<void> {
     intents: [GatewayIntentBits.Guilds],
   });
 
-  client.once("clientReady", async (readyClient) => {
+  let commandsRegistered = false;
+
+  client.once("ready", async (readyClient) => {
+    if (commandsRegistered) return;
+    commandsRegistered = true;
+
     const rest = new REST({ version: "10" }).setToken(token);
     const payload = commandDefinitions.map(commandBuilder).map((command) => command.toJSON());
     const guildId = process.env["DISCORD_GUILD_ID"];
@@ -310,3 +315,4 @@ export async function startDiscordBot(): Promise<void> {
   client.on("error", (error) => logger.error({ err: error }, "Discord client error"));
   await client.login(token);
 }
+
