@@ -10,9 +10,15 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  type CategoryChannel,
   type ChatInputCommandInteraction,
+  type Guild,
+  type Message,
   type TextChannel,
+  type User,
 } from "discord.js";
+
+const TICKET_TRANSCRIPT_CHANNEL_ID = "1542399274153672715";
 const logger = { info: console.info, warn: console.warn, error: console.error };
 
 type CommandDefinition = {
@@ -120,6 +126,121 @@ function displayName(interaction: ChatInputCommandInteraction): string {
   return interaction.member && "displayName" in interaction.member
     ? interaction.member.displayName
     : interaction.user.displayName;
+}
+
+const TICKETS_CATEGORY_NAME = "Tickets";
+
+async function getOrCreateTicketsCategory(guild: Guild): Promise<CategoryChannel> {
+  const channels = await guild.channels.fetch();
+  const existing = channels.find(
+    (channel): channel is CategoryChannel =>
+      channel !== null && channel.type === ChannelType.GuildCategory && channel.name === TICKETS_CATEGORY_NAME,
+  );
+  if (existing) {
+    return existing;
+  }
+
+  return guild.channels.create({
+    name: TICKETS_CATEGORY_NAME,
+    type: ChannelType.GuildCategory,
+    reason: "Shared category for support tickets",
+    permissionOverwrites: [
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel],
+      },
+    ],
+  });
+}
+
+async function fetchAllMessages(channel: TextChannel): Promise<Message[]> {
+  const messages: Message[] = [];
+  let beforeId: string | undefined;
+
+  for (;;) {
+    const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) });
+    if (batch.size === 0) break;
+    messages.push(...batch.values());
+    beforeId = batch.last()?.id;
+    if (batch.size < 100) break;
+  }
+
+  return messages.reverse();
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+  return parts.join(" ");
+}
+
+function chunkString(value: string, maxLength: number): string[] {
+  if (value.length === 0) return ["(no messages)"];
+  const chunks: string[] = [];
+  let remaining = value;
+  while (remaining.length > 0) {
+    chunks.push(remaining.slice(0, maxLength));
+    remaining = remaining.slice(maxLength);
+  }
+  return chunks;
+}
+
+async function sendTicketTranscript(params: {
+  guild: Guild;
+  channel: TextChannel;
+  openedBy: User | null;
+  closedBy: User;
+  claimed: boolean;
+  createdAt: Date;
+  closedAt: Date;
+}): Promise<void> {
+  const { guild, channel, openedBy, closedBy, claimed, createdAt, closedAt } = params;
+
+  const transcriptChannel = await guild.channels.fetch(TICKET_TRANSCRIPT_CHANNEL_ID).catch(() => null);
+  if (!transcriptChannel || !transcriptChannel.isTextBased() || !("send" in transcriptChannel)) {
+    logger.error({ channelId: TICKET_TRANSCRIPT_CHANNEL_ID }, "Ticket transcript channel is not a sendable text channel");
+    return;
+  }
+
+  const messages = await fetchAllMessages(channel);
+  const transcriptText = messages
+    .map((message) => {
+      const timestamp = new Date(message.createdTimestamp).toISOString();
+      const content = message.content && message.content.length > 0 ? message.content : "(no text content)";
+      return `[${timestamp}] ${message.author.tag}: ${content}`;
+    })
+    .join("\n");
+
+  const summaryEmbed = new EmbedBuilder()
+    .setTitle(`Ticket Transcript — #${channel.name}`)
+    .setColor(0x5865f2)
+    .addFields(
+      { name: "Opened By", value: openedBy ? `${openedBy.tag} (${openedBy.id})` : "Unknown", inline: true },
+      { name: "Closed By", value: `${closedBy.tag} (${closedBy.id})`, inline: true },
+      { name: "Claimed", value: claimed ? "Yes" : "No", inline: true },
+      { name: "Opened At", value: createdAt.toISOString(), inline: true },
+      { name: "Closed At", value: closedAt.toISOString(), inline: true },
+      { name: "Duration", value: formatDuration(closedAt.getTime() - createdAt.getTime()), inline: true },
+      { name: "Message Count", value: String(messages.length), inline: true },
+    )
+    .setTimestamp(closedAt);
+
+  await transcriptChannel.send({ embeds: [summaryEmbed] });
+
+  const transcriptChunks = chunkString(transcriptText, 3900);
+  for (let i = 0; i < transcriptChunks.length; i += 1) {
+    const chunkEmbed = new EmbedBuilder()
+      .setTitle(`Transcript — #${channel.name} (${i + 1}/${transcriptChunks.length})`)
+      .setDescription("```" + transcriptChunks[i] + "```")
+      .setColor(0x5865f2);
+    await transcriptChannel.send({ embeds: [chunkEmbed] });
+  }
 }
 
 async function handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -285,12 +406,17 @@ export async function startDiscordBot(): Promise<void> {
           ticket_problem: "Problem with Purchase",
         };
         const label = labels[interaction.customId] ?? "Support";
-        
-        // Create a category channel for the ticket
-        const category = await interaction.guild.channels.create({
-          name: `${label} - ${interaction.user.username}`,
-          type: ChannelType.GuildCategory,
-          reason: `Support ticket opened by ${interaction.user.tag}`,
+
+        // Reuse the shared "Tickets" category instead of creating one per ticket
+        const category = await getOrCreateTicketsCategory(interaction.guild);
+
+        // Create a text channel inside the shared category
+        const ticketChannel = await interaction.guild.channels.create({
+          name: `ticket-${Date.now()}`,
+          type: ChannelType.GuildText,
+          parent: category.id,
+          topic: `Opened by ${interaction.user.tag} (${interaction.user.id})`,
+          reason: `Support ticket channel for ${interaction.user.tag}`,
           permissionOverwrites: [
             {
               id: interaction.guild.roles.everyone.id,
@@ -301,14 +427,6 @@ export async function startDiscordBot(): Promise<void> {
               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages],
             },
           ],
-        });
-        
-        // Create a text channel inside the category
-        const ticketChannel = await interaction.guild.channels.create({
-          name: `ticket-${Date.now()}`,
-          type: ChannelType.GuildText,
-          parent: category.id,
-          reason: `Support ticket channel for ${interaction.user.tag}`,
         });
         
         // Send welcome message with staff mention
@@ -365,16 +483,46 @@ export async function startDiscordBot(): Promise<void> {
     
     if (interaction.isButton() && interaction.customId === "ticket_close") {
       try {
-        if (!interaction.channel || !("delete" in interaction.channel)) {
+        if (!interaction.guild || !interaction.channel || !("delete" in interaction.channel) || !interaction.channel.isTextBased()) {
           await interaction.reply({ content: "Could not find ticket channel.", ephemeral: true });
           return;
         }
-        
-        await interaction.reply({ content: "🔒 Closing ticket in 5 seconds..." });
+
+        const channel = interaction.channel as TextChannel;
+        const closedAt = new Date();
+        const createdAt = channel.createdAt ?? new Date(channel.createdTimestamp ?? Date.now());
+        const claimed = channel.name.includes("claimed");
+
+        // Try to determine who opened the ticket from the channel topic first, falling back to the oldest message.
+        let openedBy: User | null = null;
+        const topicMatch = channel.topic?.match(/Opened by .* \((\d+)\)/);
+        if (topicMatch?.[1]) {
+          openedBy = await interaction.client.users.fetch(topicMatch[1]).catch(() => null);
+        }
+        if (!openedBy) {
+          const oldestMessages = await channel.messages.fetch({ limit: 1, after: "0" }).catch(() => null);
+          const oldest = oldestMessages?.first();
+          openedBy = oldest?.author ?? null;
+        }
+
+        await interaction.reply({ content: "🔒 Closing ticket and saving transcript..." });
+
+        await sendTicketTranscript({
+          guild: interaction.guild,
+          channel,
+          openedBy,
+          closedBy: interaction.user,
+          claimed,
+          createdAt,
+          closedAt,
+        });
+
         setTimeout(() => interaction.channel?.delete().catch(logger.error), 5000);
       } catch (error) {
         logger.error({ err: error }, "Ticket close failed");
-        await interaction.reply({ content: "Failed to close ticket.", ephemeral: true });
+        if (!interaction.replied) {
+          await interaction.reply({ content: "Failed to close ticket.", ephemeral: true });
+        }
       }
       return;
     }
