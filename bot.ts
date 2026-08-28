@@ -343,9 +343,18 @@ export async function startDiscordBot(): Promise<void> {
         }
         
         const channelName = interaction.channel.name;
+        if (!channelName) {
+          await interaction.reply({ content: "Could not find ticket channel.", ephemeral: true });
+          return;
+        }
         const newName = channelName.startsWith("ticket-") ? `ticket-claimed-${Date.now()}` : `${channelName}-claimed`;
         
-        await interaction.channel.edit({ name: newName, topic: `Claimed by ${interaction.user.tag}` });
+        const channel = interaction.channel;
+        if (!channel.isTextBased() || !("edit" in channel)) {
+          await interaction.reply({ content: "This channel type does not support claiming.", ephemeral: true });
+          return;
+        }
+        await channel.edit({ name: newName, topic: `Claimed by ${interaction.user.tag}` });
         await interaction.reply({ content: `✅ Ticket claimed by ${interaction.user}`, ephemeral: false });
       } catch (error) {
         logger.error({ err: error }, "Ticket claim failed");
