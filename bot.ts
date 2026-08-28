@@ -462,19 +462,14 @@ export async function startDiscordBot(): Promise<void> {
           })
           .join("\n");
 
-        const transcriptChannel = await interaction.guild.channels.fetch(TRANSCRIPT_CHANNEL_ID).catch(() => null);
         const channelName = "name" in channel && channel.name ? channel.name : channel.id;
-        if (transcriptChannel && transcriptChannel.isTextBased()) {
-          const attachment = new AttachmentBuilder(Buffer.from(transcriptText || "No messages found.", "utf-8"), {
-            name: `transcript-${channelName}.txt`,
-          });
-          await transcriptChannel.send({
-            content: `📋 Transcript for ticket **${channelName}**, closed by ${interaction.user.tag}`,
-            files: [attachment],
-          });
-        } else {
-          logger.error({ transcriptChannelId: TRANSCRIPT_CHANNEL_ID }, "Transcript channel not found");
-        }
+        const attachment = new AttachmentBuilder(Buffer.from(transcriptText || "No messages found.", "utf-8"), {
+          name: `transcript-${channelName}.txt`,
+        });
+        await channel.send({
+          content: `📋 Transcript for ticket **${channelName}**, closed by ${interaction.user.tag}`,
+          files: [attachment],
+        });
 
         await channel.delete();
 
