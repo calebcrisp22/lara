@@ -245,6 +245,8 @@ export async function startDiscordBot(): Promise<void> {
     return;
   }
 
+  const staffRoleId = process.env["DISCORD_STAFF_ROLE_ID"];
+
   const client = new Client({
     intents: [GatewayIntentBits.Guilds],
   });
@@ -309,8 +311,12 @@ export async function startDiscordBot(): Promise<void> {
           reason: `Support ticket channel for ${interaction.user.tag}`,
         });
         
-        // Send welcome message
-        await ticketChannel.send(`Welcome ${interaction.user}! A team member will respond shortly.\n\n**Category:** ${label}`);
+        // Send welcome message with staff mention
+        let welcomeMessage = `Welcome ${interaction.user}! A team member will respond shortly.\\n\\n**Category:** ${label}`;
+        if (staffRoleId) {
+          welcomeMessage = `<@&${staffRoleId}> ${welcomeMessage}`;
+        }
+        await ticketChannel.send(welcomeMessage);
         
         // Send ticket management buttons
         const ticketButtons = new ActionRowBuilder<ButtonBuilder>().addComponents(
