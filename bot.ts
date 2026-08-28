@@ -309,7 +309,16 @@ export async function startDiscordBot(): Promise<void> {
           reason: `Support ticket channel for ${interaction.user.tag}`,
         });
         
+        // Send welcome message
         await ticketChannel.send(`Welcome ${interaction.user}! A team member will respond shortly.\n\n**Category:** ${label}`);
+        
+        // Send ticket management buttons
+        const ticketButtons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId("ticket_claim").setLabel("✋ Claim Ticket").setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId("ticket_close").setLabel("🔒 Close Ticket").setStyle(ButtonStyle.Danger),
+        );
+        await ticketChannel.send({ components: [ticketButtons] });
+        
         await interaction.reply({ content: `Your ticket has been created in ${ticketChannel}`, ephemeral: true });
       } catch (error) {
         logger.error({ err: error }, "Ticket creation failed");
@@ -319,6 +328,42 @@ export async function startDiscordBot(): Promise<void> {
       }
       return;
     }
+    
+    if (interaction.isButton() && interaction.customId === "ticket_claim") {
+      try {
+        if (!interaction.channel || !("name" in interaction.channel)) {
+          await interaction.reply({ content: "Could not find ticket channel.", ephemeral: true });
+          return;
+        }
+        
+        const channelName = interaction.channel.name;
+        const newName = channelName.startsWith("ticket-") ? `ticket-claimed-${Date.now()}` : `${channelName}-claimed`;
+        
+        await interaction.channel.edit({ name: newName, topic: `Claimed by ${interaction.user.tag}` });
+        await interaction.reply({ content: `✅ Ticket claimed by ${interaction.user}`, ephemeral: false });
+      } catch (error) {
+        logger.error({ err: error }, "Ticket claim failed");
+        await interaction.reply({ content: "Failed to claim ticket.", ephemeral: true });
+      }
+      return;
+    }
+    
+    if (interaction.isButton() && interaction.customId === "ticket_close") {
+      try {
+        if (!interaction.channel || !("delete" in interaction.channel)) {
+          await interaction.reply({ content: "Could not find ticket channel.", ephemeral: true });
+          return;
+        }
+        
+        await interaction.reply({ content: "🔒 Closing ticket in 5 seconds..." });
+        setTimeout(() => interaction.channel?.delete().catch(logger.error), 5000);
+      } catch (error) {
+        logger.error({ err: error }, "Ticket close failed");
+        await interaction.reply({ content: "Failed to close ticket.", ephemeral: true });
+      }
+      return;
+    }
+    
     if (!interaction.isChatInputCommand()) return;
     try {
       await handleCommand(interaction);
