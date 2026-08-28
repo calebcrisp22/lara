@@ -1,6 +1,7 @@
 import {
   Client,
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -14,6 +15,9 @@ import {
   type TextChannel,
 } from "discord.js";
 const logger = { info: console.info, warn: console.warn, error: console.error };
+
+const TICKET_CATEGORY_ID = "1542402091706884116";
+const TRANSCRIPT_CHANNEL_ID = "1542399274153672715";
 
 type CommandDefinition = {
   name: string;
@@ -285,12 +289,13 @@ export async function startDiscordBot(): Promise<void> {
           ticket_problem: "Problem with Purchase",
         };
         const label = labels[interaction.customId] ?? "Support";
-        
-        // Create a category channel for the ticket
-        const category = await interaction.guild.channels.create({
-          name: `${label} - ${interaction.user.username}`,
-          type: ChannelType.GuildCategory,
-          reason: `Support ticket opened by ${interaction.user.tag}`,
+
+        // Create the ticket text channel under the single shared ticket category
+        const ticketChannel = await interaction.guild.channels.create({
+          name: `ticket-${Date.now()}`,
+          type: ChannelType.GuildText,
+          parent: TICKET_CATEGORY_ID,
+          reason: `Support ticket channel for ${interaction.user.tag}`,
           permissionOverwrites: [
             {
               id: interaction.guild.roles.everyone.id,
@@ -301,14 +306,6 @@ export async function startDiscordBot(): Promise<void> {
               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages],
             },
           ],
-        });
-        
-        // Create a text channel inside the category
-        const ticketChannel = await interaction.guild.channels.create({
-          name: `ticket-${Date.now()}`,
-          type: ChannelType.GuildText,
-          parent: category.id,
-          reason: `Support ticket channel for ${interaction.user.tag}`,
         });
         
         // Send welcome message with staff mention
@@ -365,13 +362,39 @@ export async function startDiscordBot(): Promise<void> {
     
     if (interaction.isButton() && interaction.customId === "ticket_close") {
       try {
-        if (!interaction.channel || !("delete" in interaction.channel)) {
+        const channel = interaction.channel;
+        if (!interaction.guild || !channel || !("delete" in channel) || !channel.isTextBased()) {
           await interaction.reply({ content: "Could not find ticket channel.", ephemeral: true });
           return;
         }
-        
+
         await interaction.reply({ content: "🔒 Closing ticket in 5 seconds..." });
-        setTimeout(() => interaction.channel?.delete().catch(logger.error), 5000);
+
+        // Build a transcript of the ticket channel's messages
+        const messages = await channel.messages.fetch({ limit: 100 });
+        const sortedMessages = [...messages.values()].reverse();
+        const transcriptText = sortedMessages
+          .map((message) => {
+            const timestamp = new Date(message.createdTimestamp).toISOString();
+            const content = message.content || (message.embeds.length ? "[embed]" : "[no content]");
+            return `[${timestamp}] ${message.author.tag}: ${content}`;
+          })
+          .join("\n");
+
+        const transcriptChannel = await interaction.guild.channels.fetch(TRANSCRIPT_CHANNEL_ID).catch(() => null);
+        if (transcriptChannel && transcriptChannel.isTextBased()) {
+          const attachment = new AttachmentBuilder(Buffer.from(transcriptText || "No messages found.", "utf-8"), {
+            name: `transcript-${channel.name}.txt`,
+          });
+          await transcriptChannel.send({
+            content: `📋 Transcript for ticket **${channel.name}**, closed by ${interaction.user.tag}`,
+            files: [attachment],
+          });
+        } else {
+          logger.error({ transcriptChannelId: TRANSCRIPT_CHANNEL_ID }, "Transcript channel not found");
+        }
+
+        setTimeout(() => channel.delete().catch(logger.error), 5000);
       } catch (error) {
         logger.error({ err: error }, "Ticket close failed");
         await interaction.reply({ content: "Failed to close ticket.", ephemeral: true });
